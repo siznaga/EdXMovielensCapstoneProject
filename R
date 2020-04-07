@@ -1,0 +1,351 @@
+#######################################################################
+# Begin: Header
+#######################################################################
+
+# DataScience: Capstone - MovieLens Project
+# April 2020
+# Stephany Iznaga
+
+# Task: Train a machine learning algorithm using the inputs in one 
+# subset to predict movie ratings in the validation set.
+
+#######################################################################
+# End: Header
+#######################################################################
+# Begin: Create edx set, validation set
+# Note: This code was provided by the course staff
+#######################################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding")
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+#######################################################################
+# End: Create edx set, validation set
+# Note: This code was provided by the course staff
+#######################################################################
+# Begin: Model 1 - Naive prediction of the average rating
+#######################################################################
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the RMSE
+rmse_1<-RMSE(validation$rating,avg_rating)
+
+# Naming the model
+model_1<-"Average rating"
+
+#######################################################################
+# End: Model 1 - Naive prediction of the average rating
+#######################################################################
+# Begin: Model 2 - Prediction based on average rating and a movie effect
+#######################################################################
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the average rating for each movie
+avg_movie_ratings<-edx%>%group_by(movieId)%>%summarize(b_i=mean(rating-avg_rating))
+
+# Computation of the predicted ratings
+pred_movie_ratings<-avg_rating+validation%>%left_join(avg_movie_ratings,by="movieId")%>%pull(b_i)
+
+# Computation of the RMSE
+rmse_2<-RMSE(validation$rating,pred_movie_ratings)
+
+# Naming the model
+model_2<-"Movie effect"
+
+#######################################################################
+# End: Model 2 - Prediction based on average rating and a movie effect
+#######################################################################
+# Begin: Model 3 - Prediction based on average rating, a movie and user effect
+#######################################################################
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the average rating for each movie
+avg_movie_ratings<-edx%>%group_by(movieId)%>%summarize(b_i=mean(rating-avg_rating))
+
+# Computation of the user average
+avg_user_ratings<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%group_by(userId)%>%summarize(b_u=mean(rating-avg_rating-b_i))
+
+# Computation of the predicted ratings
+pred_movie_ratings<-validation%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%mutate(pred=avg_rating+b_i+b_u)%>%pull(pred)
+
+# Computation of the RMSE
+rmse_3<-RMSE(validation$rating,pred_movie_ratings)
+
+# Naming the model
+model_3<-"Movie and user effect"
+
+#######################################################################
+# End: Model 3 - Prediction based on average rating, a movie and user effect
+#######################################################################
+# Begin: Model 4 - Prediction based on average rating, a movie, user and year effect
+#######################################################################
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the average rating for each movie
+avg_movie_ratings<-edx%>%group_by(movieId)%>%summarize(b_i=mean(rating-avg_rating))
+
+# Computation of the user average
+avg_user_ratings<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%group_by(userId)%>%summarize(b_u=mean(rating-avg_rating-b_i))
+
+# Extraction the year from the title and add it as a column in the edx dataset
+edx<-edx%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Computation of the year effect
+year_effect<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%group_by(year)%>%summarize(b_y=mean(rating-avg_rating-b_i-b_u))
+
+# Extraction the year from the title and add it as a column in the validation dataset
+validation<-validation%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Computation of the predicted ratings
+pred_movie_ratings<-validation%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%mutate(pred=avg_rating+b_i+b_u+b_y)%>%pull(pred)
+
+# Computation of the RMSE
+rmse_4<-RMSE(validation$rating,pred_movie_ratings)
+
+# Naming the model
+model_4<-"Movie, user and year effect"
+
+#######################################################################
+# End: Model 4 - Prediction based on average rating, a movie, user and year effect
+#######################################################################
+# Begin: Model 5 - Prediction based on average rating, a movie, user, year and genre effect
+#######################################################################
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the average rating for each movie
+avg_movie_ratings<-edx%>%group_by(movieId)%>%summarize(b_i=mean(rating-avg_rating))
+
+# Computation of the user average
+avg_user_ratings<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%group_by(userId)%>%summarize(b_u=mean(rating-avg_rating-b_i))
+
+# Extraction the year from the title and add it as a column in the edx dataset
+edx<-edx%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Computation of the year effect
+year_effect<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%group_by(year)%>%summarize(b_y=mean(rating-avg_rating-b_i-b_u))
+
+# Computation of the genre effect
+genre_effect<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%group_by(genres)%>%summarize(b_g=mean(rating-avg_rating-b_i-b_u-b_y))
+
+# Extraction the year from the title and add it as a column in the validation dataset
+validation<-validation%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Computation of the predicted ratings
+pred_movie_ratings<-validation%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%left_join(genre_effect,by="genres")%>%mutate(pred=avg_rating+b_i+b_u+b_y+b_g)%>%pull(pred)
+
+# Computation of the RMSE
+rmse_5<-RMSE(validation$rating,pred_movie_ratings)
+
+# Naming the model
+model_5<-"Movie, user, year and genre effect"
+
+#######################################################################
+# End: Model 5 - Prediction based on average rating, a movie, user, year and genre effect
+#######################################################################
+# Begin: Model 6 - Model 5 but with regularization (one parameter)
+#######################################################################
+
+# Definition of the possible range of parameter lambda
+lambdas<-seq(0,10,0.25)
+
+# Extraction the year from the title and add it as a column in the edx dataset
+edx<-edx%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Extraction the year from the title and add it as a column in the validation dataset
+validation<-validation%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Computation of the overall average rating
+avg_rating<-mean(edx$rating)
+
+# Computation of the RMSE for every possible lambda
+rmses<-sapply(lambdas,function(l){
+  
+  # Computation of the regularized average rating for each movie
+  avg_movie_ratings<-edx%>%group_by(movieId)%>%summarize(b_i=sum(rating-avg_rating)/(n()+l))
+  
+  # Computation of the regularized average rating for each user
+  avg_user_ratings<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%group_by(userId)%>%summarize(b_u=sum(rating-avg_rating-b_i)/(n()+l))
+  
+  # Computation of the regularized average year effect for each year
+  year_effect<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%group_by(year)%>%summarize(b_y=sum(rating-avg_rating-b_i-b_u)/(n()+l))
+  
+  # Computation of the regularized average genre effect for each genre
+  genre_effect<-edx%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%group_by(genres)%>%summarize(b_g=mean(rating-avg_rating-b_i-b_u-b_y))
+  
+  # Computation of the predicted ratings
+  pred_movie_ratings<-validation%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%left_join(genre_effect,by="genres")%>%mutate(pred=avg_rating+b_i+b_u+b_y+b_g)%>%pull(pred)
+  
+  # Computation of the RMSE
+  RMSE(pred_movie_ratings,validation$rating)
+})
+
+# Pull the parameter which minimizes the RMSE
+lambda<-lambdas[which.min(rmses)]
+
+# Pull the smallest RMSE
+rmse_6<-min(rmses)
+
+# Naming the model
+model_6<-"Regularized movie, user, year and genre effect"
+
+#######################################################################
+# End: Model 6 - Model 5 but with regularization (one parameter)
+#######################################################################
+# Begin: Model 7 - Model 5 but with regularization (four parameters)
+#######################################################################
+
+# Note: This code is not complete, there is no calculation for all folds, no calculation
+# of predicted ratings and no calculation of the RMSE. This is because the following code
+# was used to estimate the time required for the whole computation. After learning that it
+# would take approximately 52 days with the hardware available, I stopped the computation
+# and did not complete the code.
+
+# Extraction the year from the title and add it as a column in the edx dataset
+edx<-edx%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Extraction the year from the title and add it as a column in the validation dataset
+validation<-validation%>%mutate(year=as.integer(substr(title,(nchar(title)+1)-5,nchar(title)-1)))
+
+# Creation of five folds for the cross validation
+set.seed(1,sample.kind="Rounding")
+k_folds<-createFolds(edx$rating,k=5,returnTrain=FALSE)
+
+# Definition of the possible range of the parameters lambda
+lambdas_i<-seq(0,10,0.25)
+lambdas_u<-seq(0,10,0.25)
+lambdas_y<-seq(0,10,0.25)
+lambdas_g<-seq(0,10,0.25)
+
+# Definition of a dataframe to store the RMSE and the affiliated parameters
+results<-data.frame("l_i"=numeric(0),"l_u"=numeric(0),"l_y"=numeric(0),"l_g"=numeric(0),"rmse"=numeric(0))
+
+# Creation of a training set and a test set similar to the creation of the edx and validation datasets
+# Separation of the a training and a test set with the first fold (Only the first fold is used to estimate the required time for the whole computation, therefore there is no loop for the computation with all folds)
+train_set<-edx[-k_folds[[1]],]
+temp<-edx[k_folds[[1]],]
+
+# Making sure userId and movieId in the test set are also in training set
+test_set<-temp%>%semi_join(train_set,by="movieId")%>%semi_join(train_set,by="userId")
+
+# Add rows removed from test set back into the training set
+removed<-anti_join(temp,test_set)
+train_set<-rbind(train_set,removed)
+rm(removed,temp)
+
+# Computation of the overall average rating
+avg_rating<-mean(train_set$rating)
+
+# Computation of the sum of the rating for each movie
+avg_movie_ratings<-train_set%>%group_by(movieId)%>%summarize(sum_b_i=sum(rating-avg_rating),n=n())
+
+# Definition of a loop to compute the movie ratings with every possible lambda_i
+for(l_i in lambdas_i){
+  
+  # Computation of the average regularized rating for each movie
+  avg_movie_ratings$b_i<-avg_movie_ratings$sum_b_i/(avg_movie_ratings$n+l_i)
+  
+  # Computation of the sum of the user rating for each user
+  avg_user_ratings<-train_set%>%left_join(avg_movie_ratings,by="movieId")%>%group_by(userId)%>%summarize(sum_b_u=sum(rating-avg_rating-b_i), n=n())
+  
+  # Definition of a loop to compute the user ratings with every possible lambda_u
+  for(l_u in lambdas_u){
+    
+    # Computation of the average regularized rating for each user
+    avg_user_ratings$b_u<-avg_user_ratings$sum_b_u/(avg_user_ratings$n+l_u)
+    
+    # Computation of the sum of the year effect for each year
+    year_effect<-train_set%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%group_by(year)%>%summarize(sum_b_y=sum(rating-avg_rating-b_i-b_u),n=n())
+    
+    # Definition of a loop to compute the year effect with every possible lambda_y
+    for(l_y in lambdas_y){
+      
+      # Computation of the average regularized year effect for each year
+      year_effect$b_y<-year_effect$sum_b_y/(year_effect$n+l_y)
+      
+      # Computation of the sum of the genre effect for each genre
+      genre_effect<-train_set%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%group_by(genres)%>%summarize(sum_b_g=sum(rating-avg_rating-b_i-b_u-b_y),n=n())
+      
+      # Definition of a loop to compute the genre effect with every possible lambda_g
+      for(l_g in lambdas_g){
+        
+        # Computation of the average regularized genre effect for each year
+        genre_effect$b_g<-genre_effect$sum_b_g/(genre_effect$n+l_g)
+        
+        # Computation of the predicted ratings
+        pred_movie_ratings<-test_set%>%left_join(avg_movie_ratings,by="movieId")%>%left_join(avg_user_ratings,by="userId")%>%left_join(year_effect,by="year")%>%left_join(genre_effect,by="genres")%>%mutate(pred=avg_rating+b_i+b_u+b_y+b_g)%>%pull(pred)
+        
+        # Computation of the RMSE
+        rmse<-RMSE(pred_movie_ratings,test_set$rating,na.rm=T)
+        
+        # Storing of the RMSE and the affiliated parameters in a dataframe
+        results[nrow(results)+1,]=list(l_i=l_i,l_u=l_u,l_y=l_y,l_g=l_g,rmse=rmse)
+        
+        # Printing of the current parameters to show the end of the computation with these parameters
+        print(paste("l_i:", l_i, " l_u:", l_u, " l_y:", l_y, " l_g:" , l_g))
+      }
+    }
+  }
+}
+
+#######################################################################
+# End: Model 7 - Model 5 but with regularization (four parameters)
+#######################################################################
+# Begin: Summarization of the results
+#######################################################################
+
+# Definition and printing of the table with all results
+result_table<-data.frame(Model=c(model_1,model_2,model_3,model_4,model_5,model_6),RMSE=c(rmse_1,rmse_2,rmse_3,rmse_4,rmse_5,rmse_6))
+result_table%>%knitr::kable()
+
+#######################################################################
+# End: Summarization of the results
+#######################################################################
